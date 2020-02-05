@@ -158,7 +158,7 @@ void * output_handle_mix(void *_config) {
 								// Calculate the required number of packets betweem this PCR and the last one
 								r->output_pcr_packets_needed = round((double)(conf->output_bitrate / 8 / 27000000 / 188) * (ts_packet_get_pcr(data) - r->output_last_pcr)) - 1;
 								// Check the boundaries
-								if (r->output_pcr_packets_needed > o_maxpackets)
+								if ((unsigned int)r->output_pcr_packets_needed > o_maxpackets)
 									r->output_pcr_packets_needed = o_maxpackets;
 								else if (r->output_pcr_packets_needed < 0)
 									r->output_pcr_packets_needed = 0;

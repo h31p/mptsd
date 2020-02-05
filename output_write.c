@@ -109,7 +109,9 @@ ssize_t ts_frame_write(OUTPUT *o, uint8_t *data) {
 	}
 
 	if (o->ofd)
-		write(o->ofd, data, FRAME_PACKET_SIZE);
+		if (!write(o->ofd, data, FRAME_PACKET_SIZE)) {
+			written = 0;
+		}
 
 	return written;
 }

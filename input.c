@@ -144,7 +144,9 @@ void input_buffer_add(INPUT *r, uint8_t *data, int datasize) {
 	if (r->dienow)
 		return;
 	if (r->ifd)
-		write(r->ifd, data, datasize);
+		if (!write(r->ifd, data, datasize)) {
+			proxy_log(r, "!!! buffer write failed");
+		}
 	if (r->disabled) {
 		unsigned long bufsize = r->buf->input - r->buf->output;
 		double buffull = ((double)bufsize / r->buf->size) * 100;
@@ -223,7 +225,9 @@ int process_pat(INPUT *r, uint16_t pid, uint8_t *ts_packet) {
 			}
 			P->ts_header.continuity = s->pid_pat_cont;
 			s->pid_pat_cont += P->section_header->num_packets;
-			write(r->ifd, P->section_header->packet_data, P->section_header->num_packets * TS_PACKET_SIZE);
+			if (!write(r->ifd, P->section_header->packet_data, P->section_header->num_packets * TS_PACKET_SIZE)) {
+				proxy_log(r, "!!! output file write failed !!!");
+			}
 		}
 	}
 	// Stuff packet with NULL data

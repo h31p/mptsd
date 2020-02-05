@@ -120,126 +120,151 @@ void connect_output(OUTPUT *o) {
 */
 int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 	CHANSRC *src = chansrc_init(r->channel->source);
-	if (!src) {
-		LOGf("ERR  : Can't parse channel source | Channel: %s Source: %s\n", r->channel->name, r->channel->source);
-		FATAL_ERROR;
-	}
-	r->connected = 0;
-	r->reconnect = 0;
-
-	int active = 1;
-	int dret = async_resolve_host(src->host, src->port, &(r->src_sockname), 5000, &active);
-	if (dret != 0) {
-		if (dret == 1)
-			proxy_log(r, "Can't resolve host");
-		if (dret == 2)
-			proxy_log(r, "Timeout resolving host");
-		DO_RECONNECT;
-	}
-
-	proxy_log(r, "Connecting");
-
-	char buf[1024];
-	*http_code = 0;
-	if (src->sproto == tcp_sock) {
-		r->sock = socket(PF_INET, SOCK_STREAM, 0);
-		if (r->sock < 0) {
-			log_perror("play(): Could not create SOCK_STREAM socket.", errno);
+	char *redirloc = NULL;
+	do {
+		if (!src) {
+			LOGf("ERR  : Can't parse channel source | Channel: %s Source: %s\n", r->channel->name, r->channel->source);
 			FATAL_ERROR;
 		}
-		//proxy_log(r, "Add");
-		if (do_connect(r->sock, (struct sockaddr *)&(r->src_sockname), sizeof(r->src_sockname), PROXY_CONNECT_TIMEOUT) < 0) {
-			LOGf("ERR  : Error connecting to %s srv_fd: %i err: %s\n", r->channel->source, r->sock, strerror(errno));
+		r->connected = 0;
+		r->reconnect = 0;
+	
+		int active = 1;
+		int dret = async_resolve_host(src->host, src->port, &(r->src_sockname), 5000, &active);
+		if (dret != 0) {
+			if (dret == 1)
+				proxy_log(r, "Can't resolve host");
+			if (dret == 2)
+				proxy_log(r, "Timeout resolving host");
 			DO_RECONNECT;
 		}
-
-		snprintf(buf,sizeof(buf)-1, "GET /%s HTTP/1.0\r\nHost: %s:%u\r\nX-Smart-Client: yes\r\nUser-Agent: %s %s (%s)\r\n\r\n",
-		         src->path, src->host, src->port, server_sig, server_ver, config->ident);
-		buf[sizeof(buf)-1] = 0;
-		fdwrite(r->sock, buf, strlen(buf));
-
-		char xresponse[128];
-		memset(xresponse, 0, sizeof(xresponse));
-		memset(buf, 0, sizeof(buf));
-		regmatch_t res[4];
-		while (fdgetline(r->sock,buf,sizeof(buf)-1)) {
-			if (buf[0] == '\n' || buf[0] == '\r')
-				break;
-			if (strstr(buf,"HTTP/1.") != NULL) {
-				regex_t http_response;
-				regcomp(&http_response, "^HTTP/1.[0-1] (([0-9]{3}) .*)", REG_EXTENDED);
-				if (regexec(&http_response,buf,3,res,0) != REG_NOMATCH) {
-					char codestr[4];
-					if ((unsigned int)res[1].rm_eo-res[1].rm_so < (unsigned int)sizeof(xresponse)) {
-						strncpy(xresponse, &buf[res[1].rm_so], res[1].rm_eo-res[1].rm_so);
-						xresponse[res[1].rm_eo-res[1].rm_so] = '\0';
-						chomp(xresponse);
-						strncpy(codestr, &buf[res[2].rm_so], res[2].rm_eo-res[2].rm_so);
-						codestr[3] = 0;
-						*http_code = atoi(codestr);
+	
+		proxy_log(r, "Connecting");
+	
+		char buf[1024];
+		*http_code = 0;
+		if (src->sproto == tcp_sock) {
+			r->sock = socket(PF_INET, SOCK_STREAM, 0);
+			if (r->sock < 0) {
+				log_perror("play(): Could not create SOCK_STREAM socket.", errno);
+				FATAL_ERROR;
+			}
+			//proxy_log(r, "Add");
+			if (do_connect(r->sock, (struct sockaddr *)&(r->src_sockname), sizeof(r->src_sockname), PROXY_CONNECT_TIMEOUT) < 0) {
+				LOGf("ERR  : Error connecting to %s srv_fd: %i err: %s\n", r->channel->source, r->sock, strerror(errno));
+				DO_RECONNECT;
+			}
+	
+			snprintf(buf,sizeof(buf)-1, "GET /%s HTTP/1.0\r\nHost: %s:%u\r\nX-Smart-Client: yes\r\nUser-Agent: %s %s (%s)\r\n\r\n",
+			         src->path, src->host, src->port, server_sig, server_ver, config->ident);
+			buf[sizeof(buf)-1] = 0;
+			fdwrite(r->sock, buf, strlen(buf));
+	
+			char xresponse[128];
+			memset(xresponse, 0, sizeof(xresponse));
+			memset(buf, 0, sizeof(buf));
+			regmatch_t res[4];
+			while (fdgetline(r->sock,buf,sizeof(buf)-1)) {
+				if (buf[0] == '\n' || buf[0] == '\r')
+					break;
+				if (strstr(buf,"HTTP/1.") != NULL) {
+					regex_t http_response;
+					regcomp(&http_response, "^HTTP/1.[0-1] (([0-9]{3}) .*)", REG_EXTENDED);
+					if (regexec(&http_response,buf,3,res,0) != REG_NOMATCH) {
+						char codestr[4];
+						if ((unsigned int)res[1].rm_eo-res[1].rm_so < (unsigned int)sizeof(xresponse)) {
+							strncpy(xresponse, &buf[res[1].rm_so], res[1].rm_eo-res[1].rm_so);
+							xresponse[res[1].rm_eo-res[1].rm_so] = '\0';
+							chomp(xresponse);
+							strncpy(codestr, &buf[res[2].rm_so], res[2].rm_eo-res[2].rm_so);
+							codestr[3] = 0;
+							*http_code = atoi(codestr);
+						}
+					}
+					regfree(&http_response);
+				}
+				if (strstr(buf,"Location:") != NULL) {
+					regex_t http_response;
+					regcomp(&http_response, "^Location: (.*)[\r\n]*$", REG_EXTENDED);
+					if (regexec(&http_response,buf,3,res,0) != REG_NOMATCH) {
+						redirloc = (char*)malloc(1+res[1].rm_eo - res[1].rm_so);
+						strncpy(redirloc, &buf[res[1].rm_so], res[1].rm_eo - res[1].rm_so);
+						redirloc[res[1].rm_eo-res[1].rm_so] = '\0';
+						chomp(redirloc);
+					}
+					regfree(&http_response);
+				}
+				if (*http_code == 504) { // Extract extra error code
+					if (strstr(buf, "X-ErrorCode: ") != NULL) {
+						*http_code = atoi(buf+13);
+						break;
 					}
 				}
-				regfree(&http_response);
 			}
-			if (*http_code == 504) { // Extract extra error code
-				if (strstr(buf, "X-ErrorCode: ") != NULL) {
-					*http_code = atoi(buf+13);
-					break;
+			if (*http_code == 302 && redirloc != NULL) { // Redirect received
+				chansrc_free(&src);
+				src = chansrc_init(redirloc);
+				LOGf("INPUT : [%-12s] redirected to: %s\n", r->channel->id, redirloc);
+				continue;
+			} else {
+				if (redirloc != NULL) {
+					free(redirloc);
+					redirloc = NULL;
 				}
 			}
+			if (*http_code == 0) { // No valid HTTP response, retry
+				LOGf("DEBUG: Server returned not valid HTTP code | srv_fd: %i\n", r->sock);
+				DO_RECONNECT;
+			}
+			if (*http_code == 504) { // No signal, exit
+				LOGf("ERR  : Get no-signal for %s from %s on srv_fd: %i\n", r->channel->name, r->channel->source, r->sock);
+				FATAL_ERROR;
+			}
+			if (*http_code > 300) { // Unhandled or error codes, exit
+				LOGf("ERR  : Get code %i for %s from %s on srv_fd: %i exiting.\n", *http_code, r->channel->name, r->channel->source, r->sock);
+				FATAL_ERROR;
+			}
+			// connected ok, continue
+		} else {
+	
+			char multicast = IN_MULTICAST(ntohl(r->src_sockname.sin_addr.s_addr));
+			
+			//if (!IN_MULTICAST(ntohl(r->src_sockname.sin_addr.s_addr))) {
+			//	LOGf("ERR  : %s is not multicast address\n", r->channel->source);
+			//	FATAL_ERROR;
+			//}
+			struct ip_mreq mreq;
+			struct sockaddr_in receiving_from;
+	
+			r->sock = socket(PF_INET, SOCK_DGRAM, 0);
+			if (r->sock < 0) {
+				log_perror("play(): Could not create SOCK_DGRAM socket.", errno);
+				FATAL_ERROR;
+			}
+			// LOGf("CONN : Listening on multicast socket %s srv_fd: %i retries left: %i\n", r->channel->source, r->sock, retries);
+			int on = 1;
+			setsockopt(r->sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+			
+			if (multicast)  {
+	    		// subscribe to multicast group
+	    		memcpy(&mreq.imr_multiaddr, &(r->src_sockname.sin_addr), sizeof(struct in_addr));
+	    		mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+	    		if (setsockopt(r->sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
+	    			LOGf("ERR  : Failed to add IP membership on %s srv_fd: %i\n", r->channel->source, r->sock);
+	    			FATAL_ERROR;
+	    		}
+			}
+			// bind to the socket so data can be read
+			memset(&receiving_from, 0, sizeof(receiving_from));
+			receiving_from.sin_family = AF_INET;
+			receiving_from.sin_addr   = r->src_sockname.sin_addr;
+			receiving_from.sin_port   = htons(src->port);
+			if (bind(r->sock, (struct sockaddr *) &receiving_from, sizeof(receiving_from)) < 0) {
+				LOGf("ERR  : Failed to bind to %s srv_fd: %i\n", r->channel->source, r->sock);
+				FATAL_ERROR;
+			}
 		}
-		if (*http_code == 0) { // No valid HTTP response, retry
-			LOGf("DEBUG: Server returned not valid HTTP code | srv_fd: %i\n", r->sock);
-			DO_RECONNECT;
-		}
-		if (*http_code == 504) { // No signal, exit
-			LOGf("ERR  : Get no-signal for %s from %s on srv_fd: %i\n", r->channel->name, r->channel->source, r->sock);
-			FATAL_ERROR;
-		}
-		if (*http_code > 300) { // Unhandled or error codes, exit
-			LOGf("ERR  : Get code %i for %s from %s on srv_fd: %i exiting.\n", *http_code, r->channel->name, r->channel->source, r->sock);
-			FATAL_ERROR;
-		}
-		// connected ok, continue
-	} else {
-
-		char multicast = IN_MULTICAST(ntohl(r->src_sockname.sin_addr.s_addr));
-		
-		//if (!IN_MULTICAST(ntohl(r->src_sockname.sin_addr.s_addr))) {
-		//	LOGf("ERR  : %s is not multicast address\n", r->channel->source);
-		//	FATAL_ERROR;
-		//}
-		struct ip_mreq mreq;
-		struct sockaddr_in receiving_from;
-
-		r->sock = socket(PF_INET, SOCK_DGRAM, 0);
-		if (r->sock < 0) {
-			log_perror("play(): Could not create SOCK_DGRAM socket.", errno);
-			FATAL_ERROR;
-		}
-		// LOGf("CONN : Listening on multicast socket %s srv_fd: %i retries left: %i\n", r->channel->source, r->sock, retries);
-		int on = 1;
-		setsockopt(r->sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-		
-		if (multicast)  {
-    		// subscribe to multicast group
-    		memcpy(&mreq.imr_multiaddr, &(r->src_sockname.sin_addr), sizeof(struct in_addr));
-    		mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    		if (setsockopt(r->sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-    			LOGf("ERR  : Failed to add IP membership on %s srv_fd: %i\n", r->channel->source, r->sock);
-    			FATAL_ERROR;
-    		}
-		}
-		// bind to the socket so data can be read
-		memset(&receiving_from, 0, sizeof(receiving_from));
-		receiving_from.sin_family = AF_INET;
-		receiving_from.sin_addr   = r->src_sockname.sin_addr;
-		receiving_from.sin_port   = htons(src->port);
-		if (bind(r->sock, (struct sockaddr *) &receiving_from, sizeof(receiving_from)) < 0) {
-			LOGf("ERR  : Failed to bind to %s srv_fd: %i\n", r->channel->source, r->sock);
-			FATAL_ERROR;
-		}
-	}
+	} while (redirloc != NULL);
 
 	if (setsockopt(r->sock, SOL_SOCKET, SO_RCVBUF, (const char *)&readbuflen, sizeof(readbuflen)) < 0)
 		log_perror("play(): setsockopt(SO_RCVBUF)", errno);
